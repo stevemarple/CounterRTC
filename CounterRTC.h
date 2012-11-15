@@ -16,6 +16,7 @@ public:
   class Time {
   public:
     Time(void);
+    Time(const Time &t);
     Time(time_t sec, uint16_t frac);
     
     inline time_t getSeconds(void) const {
@@ -75,7 +76,7 @@ public:
   bool setAlarm(uint8_t alarmNum, const Time &t,
 		void(*callback)(uint8_t alarmNum, bool late,
 				const void *context),
-		const void *cont);
+		const void *cont = NULL);
   void clearAlarm(uint8_t alarmNum);
   void runAlarm(uint8_t alarmNum, bool late);
   
@@ -128,6 +129,7 @@ inline bool operator>=(const CounterRTC::Time& lhs,
 {
   return !(lhs < rhs);
 }
+
 
 template <typename T>
 int8_t CounterRTC::bitWidth(T a)

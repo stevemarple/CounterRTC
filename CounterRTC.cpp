@@ -67,11 +67,19 @@ ISR(TIMER2_OVF_vect)
   
   CounterRTC::Time now(seconds, fraction);
   // Schedule future alarms. Do this before running any callbacks.
-  for (uint8_t i = 0; i < CounterRTC::numAlarms; ++i)
-    if (alarmActive[i] && now == alarmBlockTime[i] && alarmCounter[i])
-      TIMSK2 |= (1 << (OCIE2A + i));
-  
-
+  if (alarmActive[0] && now == alarmBlockTime[0] && alarmCounter[0]) {
+    while ((ASSR & (1 << OCR2AUB)) != 0)
+      ; // Wait
+    OCR2A = alarmCounter[0];
+    TIMSK2 |= (1 << OCIE2A);
+  }
+  if (alarmActive[1] && now == alarmBlockTime[1] && alarmCounter[1]) {
+    while ((ASSR & (1 << OCR2BUB)) != 0)
+      ; // Wait
+    OCR2B = alarmCounter[1];
+    TIMSK2 |= (1 << OCIE2B);
+  }
+     
   // Check for active alarms that must be run now.
   for (uint8_t i = 0; i < CounterRTC::numAlarms; ++i)
     if (alarmActive[i] && now == alarmBlockTime[i] && alarmCounter[i] == 0)
@@ -278,12 +286,16 @@ bool CounterRTC::getAlarm(uint8_t alarmNum, Time &t,
 				  const void *context),
 		       const void **cont) const
 {
-  t = alarmTime[alarmNum];
-  if (cb)
-    *cb = callback[alarmNum];
-  if (cont)
-    *cont = context[alarmNum];
-  return alarmActive[alarmNum];
+  bool active;
+  ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+    t = alarmTime[alarmNum];
+    if (cb)
+      *cb = callback[alarmNum];
+    if (cont)
+      *cont = context[alarmNum];
+    active = alarmActive[alarmNum]; 
+  }
+  return active;
 }
 
 bool CounterRTC::setAlarm(uint8_t alarmNum, const Time &t,
@@ -391,7 +403,12 @@ CounterRTC::Time::Time(void) : seconds(0), fraction(0)
 {
   ;
 }
- 
+
+CounterRTC::Time::Time(const Time &t) : seconds(t.seconds), fraction(t.fraction)
+{
+  ;
+}
+
 CounterRTC::Time::Time(time_t sec, uint16_t frac)
   : seconds(sec), fraction(frac)
 {
