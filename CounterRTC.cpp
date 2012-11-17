@@ -59,7 +59,7 @@ static void calcAlarmParams(const CounterRTC::Time &t,
 // TIMER2_COMPB_vect
 ISR(TIMER2_OVF_vect)
 {
-  uint32_t tmp = fraction + overflowFractions;
+  uint32_t tmp = (uint32_t)(fraction) + overflowFractions;
   fraction = tmp & (CounterRTC::fractionsPerSecond - 1);
   seconds += (tmp >> CounterRTC::fractionsPerSecondLog2);
 
@@ -70,12 +70,14 @@ ISR(TIMER2_OVF_vect)
   if (alarmActive[0] && now == alarmBlockTime[0] && alarmCounter[0]) {
     while ((ASSR & (1 << OCR2AUB)) != 0)
       ; // Wait
+    TIFR2 |= (1 << OCF2A);
     OCR2A = alarmCounter[0];
     TIMSK2 |= (1 << OCIE2A);
   }
   if (alarmActive[1] && now == alarmBlockTime[1] && alarmCounter[1]) {
     while ((ASSR & (1 << OCR2BUB)) != 0)
       ; // Wait
+    TIFR2 |= (1 << OCF2B);
     OCR2B = alarmCounter[1];
     TIMSK2 |= (1 << OCIE2B);
   }
@@ -137,6 +139,8 @@ bool CounterRTC::begin(uint16_t freq, bool extClock, uint8_t prescaler)
 		  overflowFractions & (CounterRTC::fractionsPerSecond - 1));
     
   TIMSK2 = 0; // Disable timer-related interrupts before setting callback
+  TIFR2 |= (_BV(OCF2B) | _BV(OCF2A) | _BV(TOV2));
+
   externalClock = extClock;
   for (uint8_t i = 0; i < numAlarms; ++i) {
     alarmActive[i] = false;
@@ -164,7 +168,7 @@ bool CounterRTC::begin(uint16_t freq, bool extClock, uint8_t prescaler)
       // Must be done before asynchronous operation enabled
       ASSR |= (1 << EXCLK);
 
-    // Enable asynchronous operaiton
+    // Enable asynchronous operation
     ASSR |= (1 << AS2);
     
     TCCR2A = 0;
@@ -185,7 +189,7 @@ bool CounterRTC::begin(uint16_t freq, bool extClock, uint8_t prescaler)
     while((ASSR & ((1 << TCN2UB) | (1 << OCR2AUB) | (1 << OCR2BUB) | (1 << TCR2AUB) | (1 << TCR2BUB))) != 0)
       ; // Wait for changes to latch
 
-    TIFR2 = 0;
+    TIFR2 |= (_BV(OCF2B) | _BV(OCF2A) | _BV(TOV2));
     // No alarms, interrupt only on overflow.
     TIMSK2 = (1 << TOIE2);
   }
@@ -199,11 +203,13 @@ void CounterRTC::getTime(Time &t) const
   CounterRTC::time_t s;
   uint16_t f;
   ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+    while ((ASSR & (1 << TCN2UB)) != 0)
+      ; // Wait for any changes to TCNT2 to propagate.
     count = TCNT2;
     s = seconds;
     f = fraction;
   }
-  uint32_t tmp = f + (count * fractionsPerTick);
+  uint32_t tmp = f + (count * (uint32_t)(fractionsPerTick));
   t.setSeconds(s + (tmp >> CounterRTC::fractionsPerSecondLog2)); // divide
   t.setFraction(tmp & (CounterRTC::fractionsPerSecond - 1)); // mod
 }
@@ -215,7 +221,14 @@ void CounterRTC::setTime(const Time &t)
   // overflowInterval. Also the time that is set must be a multiple of
   // fractionsPerTick.
 
+  uint32_t SECS; uint16_t FRAC; uint8_t COUNT;
   ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+    uint8_t prescaler = TCCR2B & (_BV(CS22) | _BV(CS21) | _BV(CS20));
+    while (ASSR & _BV(TCR2BUB))
+      ; // Wait
+    TCCR2B = 0; // Stop the clock
+    GTCCR |= _BV(PSRASY); // Reset prescaler
+
     uint32_t tmpFraction;
     if (overflowInterval.getSeconds()) {
       time_t mask = overflowInterval.getSeconds() - 1;
@@ -237,28 +250,26 @@ void CounterRTC::setTime(const Time &t)
     
     // The counter must now take the lower 8 bits and the upper 3
     // bytes goes into fraction
-    fraction = (tmpFraction & 0xFFF0) << fractionsPerTickLog2;
+    fraction = (tmpFraction & 0xFFFFFF00L) << fractionsPerTickLog2;
 
-    while (ASSR & _BV(TCN2UB))
+    while (ASSR & (_BV(TCN2UB) | _BV(TCR2BUB)))
       ; // Wait until TCNT2 can be updated.
 
-    TCNT2 = (uint8_t)tmpFraction; // Take lowest byte only
-    GTCCR |= _BV(PSRASY); // Reset prescaler
+    TCNT2 = (uint8_t)(tmpFraction & 0XFF); // Take lowest byte only
+    TCCR2B = prescaler;
+    SECS = seconds; FRAC = fraction; COUNT = (uint8_t)(tmpFraction & 0XFF);
   }
+
+  Serial.print("SECONDS: "); Serial.println(SECS);
+  Serial.print("FRACTIONS: "); Serial.println(FRAC);
+  Serial.print("COUNT: "); Serial.println(COUNT);
 }
 
+// Not optimum but ok for now
 void CounterRTC::setTime(const Time &t, Time &oldTime)
 {
-  ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-    oldTime.setSeconds(seconds);
-    oldTime.setFraction(fraction);
-    seconds = t.getSeconds();
-    fraction = t.getFraction();
-
-    while (ASSR & TCN2UB)
-      ; // Wait
-    TCNT2 = 0;
-  }
+  getTime(oldTime);
+  setTime(t);
 }
 
 bool CounterRTC::isAlarmActive(uint8_t alarmNum) const
@@ -306,24 +317,32 @@ bool CounterRTC::setAlarm(uint8_t alarmNum, const Time &t,
   if (alarmNum > numAlarms)
     return false;
   
-  if (cb == NULL) {
-    alarmActive[alarmNum] = false;
-    return false;
+  // Ensure all changes are made atomically
+  ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+    if (cb == NULL) {
+      alarmActive[alarmNum] = false;
+      return false;
+    }
+    
+    alarmTime[alarmNum] = t;
+    calcAlarmParams(alarmTime[alarmNum], alarmBlockTime[alarmNum],
+		    alarmCounter[alarmNum]);
+    callback[alarmNum] = cb;
+    context[alarmNum] = cont;
+    alarmActive[alarmNum] = true;  
   }
-
-  alarmTime[alarmNum] = t;
-  calcAlarmParams(alarmTime[alarmNum], alarmBlockTime[alarmNum],
-		  alarmCounter[alarmNum]);
-  callback[alarmNum] = cb;
-  context[alarmNum] = cont;
-  alarmActive[alarmNum] = true;  
-
+  
   // Fetch the time, see if the alarm is expired or whether it should
   // be scheduled now
   Time now;
   getTime(now);
+  bool doRunAlarm;
   ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
     Time counterZero(seconds, fraction); // Time when TCNT2 was zero
+
+    while ((ASSR & (1 << TCN2UB)) != 0)
+      ; // Wait for any changes to TCNT2 to propagate.
+    
     if (alarmBlockTime[alarmNum] == counterZero
 	&& alarmCounter[alarmNum] > TCNT2) {
       // In the future but due this cycle, set interrupt.
@@ -346,19 +365,25 @@ bool CounterRTC::setAlarm(uint8_t alarmNum, const Time &t,
       getTime(now);
       if (t > now || !alarmActive[alarmNum])
 	// Still in future, or has run
-	return true;
-      // Otherwise fall-through and run the alarm from here.
+	// return true;
+	doRunAlarm = false;
+      else
+	// Run the alarm from here.
+	doRunAlarm = true;
     }
     else if (t > now) {
       // Not expired
-      return true;
+      // return true;
+      doRunAlarm = false;
     }
-
-    // Must have expired, run, but with interrupts enabled if they
-    // already were
+    else 
+      // Must have expired, run, but with interrupts enabled if they
+      // already were
+      doRunAlarm = true;
   }
 
-  runAlarm(alarmNum, true);
+  if (doRunAlarm)
+    runAlarm(alarmNum, true);
   return true;
 }
 
@@ -369,10 +394,14 @@ void CounterRTC::clearAlarm(uint8_t alarmNum)
     return;
   ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
     // Remove the interrupt
-    if (alarmNum == 0)
+    if (alarmNum == 0) {
       TIMSK2 &= ~(1 << OCIE2A);
-    else
+      TIFR2 |= _BV(OCF2A);
+    }
+    else {
       TIMSK2 &= ~(1 << OCIE2B);
+      TIFR2 |= _BV(OCF2B);
+    }
     alarmActive[alarmNum] = false;
     alarmTime[alarmNum] = alarmBlockTime[alarmNum] = Time();
     callback[alarmNum] = NULL;
@@ -386,10 +415,14 @@ void CounterRTC::runAlarm(uint8_t alarmNum, bool late) {
   // twice.
   ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
     // Remove the interrupt
-    if (alarmNum == 0)
+    if (alarmNum == 0) {
       TIMSK2 &= ~(1 << OCIE2A);
-    else
+      TIFR2 |= _BV(OCF2A);
+    }
+    else {
       TIMSK2 &= ~(1 << OCIE2B);
+      TIFR2 |= _BV(OCF2B);
+    }
     if (!alarmActive[alarmNum])
       return;
     alarmActive[alarmNum] = false; // Ensure the timer won't run it

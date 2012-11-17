@@ -46,7 +46,7 @@ public:
   // fractionsPerSecond must be 2^n; some algebraic operations assume
   // this is the case and are implemented using bitwise AND and shift
   // for speed.
-  static const uint16_t fractionsPerSecond = 32768;
+  static const uint16_t fractionsPerSecond = 32768U;
   static const int8_t fractionsPerSecondLog2 = 15;
 
   //static inline int8_t bitWidth(uint16_t a);
@@ -147,5 +147,6 @@ int8_t CounterRTC::log2(T a)
 {
   return bitWidth(a) - (T)1;
 }
+
 
 #endif
