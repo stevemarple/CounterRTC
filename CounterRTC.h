@@ -17,36 +17,43 @@ public:
   public:
     Time(void);
     Time(const Time &t);
-    Time(time_t sec, uint16_t frac);
+    Time(time_t sec, time_t frac);
+
+    const Time& normalise(void);
     
     inline time_t getSeconds(void) const {
       return seconds;
     }
-    inline uint16_t getFraction(void) const {
+    inline time_t getFraction(void) const {
       return fraction;
     }
     
     inline void setSeconds(time_t sec) {
       seconds = sec;
+      normalise();
     }
 
-    inline void setFraction(uint16_t frac) {
+    inline void setFraction(time_t frac) {
       fraction = frac;
+      normalise();
     }
 
     bool operator==(const Time& rhs) const;
     bool operator<(const Time& rhs) const;
-
+    Time& operator+=(const Time& rhs);
+    Time& operator-=(const Time& rhs);
+    Time operator-(void) const;
+    
   private:
     time_t seconds;
-    uint16_t fraction;
+    time_t fraction;
   };
 
   static const uint8_t numAlarms = 2;
   // fractionsPerSecond must be 2^n; some algebraic operations assume
   // this is the case and are implemented using bitwise AND and shift
   // for speed.
-  static const uint16_t fractionsPerSecond = 32768U;
+  static const time_t fractionsPerSecond = 32768U;
   static const int8_t fractionsPerSecondLog2 = 15;
 
   //static inline int8_t bitWidth(uint16_t a);
@@ -130,6 +137,26 @@ inline bool operator>=(const CounterRTC::Time& lhs,
   return !(lhs < rhs);
 }
 
+inline CounterRTC::Time operator+(const CounterRTC::Time& lhs,
+				  const CounterRTC::Time& rhs)
+{
+  CounterRTC::Time r(lhs);
+  r += rhs;
+  return r;
+}
+
+inline CounterRTC::Time operator-(const CounterRTC::Time& lhs,
+				  const CounterRTC::Time& rhs)
+{
+  CounterRTC::Time r(lhs);
+  r -= rhs;
+  return r;
+}
+
+inline CounterRTC::Time abs_(const CounterRTC::Time& a)
+{
+  return CounterRTC::Time(labs(a.getSeconds()), labs(a.getFraction()));
+}
 
 template <typename T>
 int8_t CounterRTC::bitWidth(T a)

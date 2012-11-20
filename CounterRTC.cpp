@@ -7,10 +7,10 @@ CounterRTC cRTC;
 
 // volatile CounterRTC::Time time;
 volatile CounterRTC::time_t seconds = 0;
-volatile uint16_t fraction = 0;
+volatile CounterRTC::time_t fraction = 0;
 
 // Number of 1/32768 fractions for every clock tick
-uint16_t fractionsPerTick;
+CounterRTC::time_t fractionsPerTick;
 int8_t fractionsPerTickLog2;
 // Number of 1/32768 fractions when timer overflow occurs
 uint32_t overflowFractions;
@@ -132,7 +132,7 @@ bool CounterRTC::begin(uint16_t freq, bool extClock, uint8_t prescaler)
 
   fractionsPerTick = fractionsPerSecond / frequency;
   fractionsPerTickLog2 = CounterRTC::log2(fractionsPerTick);
-  overflowFractions = 256 * (time_t)fractionsPerTick;
+  overflowFractions = ((time_t)fractionsPerTick) << 8;
   overflowFractionsLog2 = log2(overflowFractions);
   overflowInterval
     = Time(overflowFractions >> CounterRTC::fractionsPerSecondLog2,
@@ -200,8 +200,8 @@ bool CounterRTC::begin(uint16_t freq, bool extClock, uint8_t prescaler)
 void CounterRTC::getTime(Time &t) const
 {
   uint8_t count;
-  CounterRTC::time_t s;
-  uint16_t f;
+  time_t s;
+  time_t f;
   ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
     while ((ASSR & (1 << TCN2UB)) != 0)
       ; // Wait for any changes to TCNT2 to propagate.
@@ -221,7 +221,7 @@ void CounterRTC::setTime(const Time &t)
   // overflowInterval. Also the time that is set must be a multiple of
   // fractionsPerTick.
 
-  uint32_t SECS; uint16_t FRAC; uint8_t COUNT;
+  uint32_t SECS; uint32_t FRAC; uint8_t COUNT;
   ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
     uint8_t prescaler = TCCR2B & (_BV(CS22) | _BV(CS21) | _BV(CS20));
     while (ASSR & _BV(TCR2BUB))
@@ -442,10 +442,43 @@ CounterRTC::Time::Time(const Time &t) : seconds(t.seconds), fraction(t.fraction)
   ;
 }
 
-CounterRTC::Time::Time(time_t sec, uint16_t frac)
+CounterRTC::Time::Time(time_t sec, time_t frac)
   : seconds(sec), fraction(frac)
 {
-  ;
+  normalise();
+}
+
+const CounterRTC::Time::Time& CounterRTC::Time::normalise(void)
+{
+  if (fraction >= fractionsPerSecond) {
+    seconds += (fraction >> fractionsPerSecondLog2); // divide 32768
+    fraction &= (fractionsPerSecond - 1); // mod 32768
+  }
+  else if (fraction < 0) {
+    time_t f = -fraction; // now positive
+    seconds -= (f >> fractionsPerSecondLog2); // divide 32768
+    fraction = -(f & (fractionsPerSecond - 1));  // mod 32768
+  }
+
+  // Fraction now in range -(fractionsPerSecond-1) to +(fractionsPerSecond-1)
+  if (seconds < 0 && fraction > 0) {
+    ++seconds;
+    fraction -= fractionsPerSecond;
+  }
+  else if (seconds > 0 && fraction < 0) {
+    --seconds;
+    fraction += fractionsPerSecond;
+  }
+  
+  // if (fraction >= fractionsPerSecond) {
+  //   // Cannot be 2 or  more times fractionsPerSecond
+  //   fraction -= fractionsPerSecond;
+  //   if (seconds >= 0)
+  //     ++seconds;
+  //   else
+  //     --seconds;
+  // }
+  return *this;
 }
 
 bool CounterRTC::Time::operator==(const Time& rhs) const
@@ -456,6 +489,24 @@ bool CounterRTC::Time::operator==(const Time& rhs) const
 bool CounterRTC::Time::operator<(const Time& rhs) const
 {
   return (seconds < rhs.getSeconds() ||
-	  (seconds == rhs.getSeconds() && fraction < rhs.getFraction()));
+          (seconds == rhs.getSeconds() && fraction < rhs.getFraction()));
 }
 
+CounterRTC::Time& CounterRTC::Time::operator+=(const Time& rhs)
+{
+  seconds += rhs.seconds;
+  fraction += rhs.fraction;
+  normalise();
+  return *this;
+}
+
+CounterRTC::Time& CounterRTC::Time::operator-=(const Time& rhs)
+{
+  *this += -rhs;
+  return *this;
+}
+
+CounterRTC::Time CounterRTC::Time::operator-(void) const
+{
+  return CounterRTC::Time(-seconds, -fraction); 
+}
