@@ -448,7 +448,7 @@ CounterRTC::Time::Time(time_t sec, time_t frac)
   normalise();
 }
 
-const CounterRTC::Time::Time& CounterRTC::Time::normalise(void)
+const CounterRTC::Time& CounterRTC::Time::normalise(void)
 {
   if (fraction >= fractionsPerSecond) {
     seconds += (fraction >> fractionsPerSecondLog2); // divide 32768
