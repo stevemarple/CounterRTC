@@ -1,7 +1,7 @@
 #ifndef COUNTERRTC_H
 #define COUNTERRTC_H
 
-#define COUNTERRTC_VERSION "0.0.0"
+#define COUNTERRTC_VERSION "1.0.0"
 
 #include <Arduino.h>
 
