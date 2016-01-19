@@ -221,7 +221,6 @@ void CounterRTC::setTime(const Time &t)
   // overflowInterval. Also the time that is set must be a multiple of
   // fractionsPerTick.
 
-  uint32_t SECS; uint32_t FRAC; uint8_t COUNT;
   ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
     uint8_t prescaler = TCCR2B & (_BV(CS22) | _BV(CS21) | _BV(CS20));
     while (ASSR & _BV(TCR2BUB))
@@ -257,15 +256,10 @@ void CounterRTC::setTime(const Time &t)
 
     TCNT2 = (uint8_t)(tmpFraction & 0XFF); // Take lowest byte only
     TCCR2B = prescaler;
-    SECS = seconds; FRAC = fraction; COUNT = (uint8_t)(tmpFraction & 0XFF);
   }
 
-  Serial.print("SECONDS: "); Serial.println(SECS);
-  Serial.print("FRACTIONS: "); Serial.println(FRAC);
-  Serial.print("COUNT: "); Serial.println(COUNT);
 }
 
-// Not optimum but ok for now
 void CounterRTC::setTime(const Time &t, Time &oldTime)
 {
   getTime(oldTime);
