@@ -110,7 +110,10 @@ ISR(TIMER2_COMPB_vect)
 }
 
 
-CounterRTC::CounterRTC(void) 
+CounterRTC::CounterRTC(void) :
+	frequency(1),
+	frequencyLog2(0),
+	externalClock(false)
 {
   for (uint8_t i = 0; i < numAlarms; ++i) {
     alarmActive[i] = false;
